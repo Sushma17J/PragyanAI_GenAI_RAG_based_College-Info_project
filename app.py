@@ -132,10 +132,23 @@ div[data-testid="stChatInput"] textarea {
     color: #ffffff !important;
     -webkit-text-fill-color: #ffffff !important;
 }
-
 /* Tables */
 div[data-testid="stDataFrame"] {
     background-color: #ffffff !important;
+}
+
+/* Make college placement evidence text black */
+div[data-testid="stMarkdownContainer"] p,
+div[data-testid="stMarkdownContainer"] li,
+div[data-testid="stMarkdownContainer"] strong,
+div[data-testid="stMarkdownContainer"] a {
+    color: #000000 !important;
+}
+
+/* Keep links black and underlined */
+div[data-testid="stMarkdownContainer"] a {
+    color: #000000 !important;
+    text-decoration: underline !important;
 }
 </style>
 """, unsafe_allow_html=True)
