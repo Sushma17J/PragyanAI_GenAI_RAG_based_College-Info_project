@@ -8,3 +8,4 @@ PyMuPDF
 python-docx
 groq
 scikit-learn
+ddgs
