@@ -336,18 +336,47 @@ else:
     preview_df = None
     st.info("Upload your spreadsheet to begin. A college-name column is required.")
 
-max_colleges = st.selectbox(
-    "How many colleges do you want to process?",
-    options=[1, 5, 10, 20, 30],
-    index=2,
-    help="Choose the maximum number of rows to research in this run. Processing many colleges may take longer and use more API credits."
-)
-st.caption(f"Selected: up to {max_colleges} colleges")
+# Select individual college names from the uploaded spreadsheet
+name_col = None
+selected_colleges = []
+
+if preview_df is not None:
+    name_col = first_matching_column(
+        preview_df,
+        ["College Name", "College", "Institution Name", "Name of College",
+         "Institute Name", "University Name", "Name"]
+    )
+
+    if name_col:
+        college_names = (
+            preview_df[name_col]
+            .dropna()
+            .astype(str)
+            .str.strip()
+        )
+        college_names = [
+            name for name in college_names.unique()
+            if name and name.lower() != "nan"
+        ]
+
+        st.markdown("### Select colleges to process")
+        selected_colleges = st.multiselect(
+            "Choose college names (you can select up to 25)",
+            options=college_names,
+            default=[],
+            max_selections=25,
+            placeholder="Search and select college names...",
+            help="Select the specific colleges from your uploaded Excel or CSV file."
+        )
+        st.caption(f"Selected {len(selected_colleges)} of up to 25 colleges.")
+    else:
+        st.error("Could not find a college-name column. Rename it to 'College Name' or 'College'.")
+
 process_clicked = st.button(
-    "🚀 Process & Convert Colleges",
+    "🚀 Process Selected Colleges",
     type="primary",
     use_container_width=True,
-    disabled=preview_df is None
+    disabled=preview_df is None or not selected_colleges
 )
 
 if process_clicked and preview_df is not None:
@@ -357,13 +386,18 @@ if process_clicked and preview_df is not None:
     else:
         try:
             client = Groq(api_key=api_key)
-            name_col = first_matching_column(preview_df, ["College Name", "College", "Institution Name", "Name of College", "Institute Name", "University Name", "Name"])
+            # name_col was detected before the button; use the selected names below.
             website_col = first_matching_column(preview_df, ["Website", "College Website", "Official Website", "URL", "Web Address"])
             district_col = first_matching_column(preview_df, ["District", "City", "Location"])
             if not name_col:
                 st.error("Could not find a college-name column. Rename a column to 'College Name' or 'College'.")
             else:
-                input_df = preview_df.copy().head(max_colleges)
+                input_df = preview_df[
+                    preview_df[name_col].astype(str).str.strip().isin(selected_colleges)
+                ].copy()
+                if input_df.empty:
+                    st.warning("Select at least one college from the dropdown before processing.")
+                    st.stop()
                 processed = []
                 research_records = []
                 progress = st.progress(0, text="Starting research…")
