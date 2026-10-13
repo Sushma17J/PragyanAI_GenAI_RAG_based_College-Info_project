@@ -1,0 +1,10 @@
+streamlit
+pandas
+openpyxl
+xlrd
+requests
+beautifulsoup4
+PyMuPDF
+python-docx
+groq
+scikit-learn
