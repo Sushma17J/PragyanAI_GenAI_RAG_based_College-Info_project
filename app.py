@@ -150,6 +150,27 @@ div[data-testid="stMarkdownContainer"] a {
     color: #000000 !important;
     text-decoration: underline !important;
 }
+/* Department table: black text on white background */
+div[data-testid="stMarkdownContainer"] table {
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    border-collapse: collapse !important;
+    width: 100% !important;
+}
+
+div[data-testid="stMarkdownContainer"] table th,
+div[data-testid="stMarkdownContainer"] table td {
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    border: 1px solid #d1d5db !important;
+    padding: 10px !important;
+}
+
+/* Bold department headings */
+div[data-testid="stMarkdownContainer"] table strong,
+div[data-testid="stMarkdownContainer"] table b {
+    color: #000000 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
