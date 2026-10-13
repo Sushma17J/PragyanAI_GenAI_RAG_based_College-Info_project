@@ -2,52 +2,52 @@ import os
 import re
 import json
 import time
-from urllib.parse import quote_plus
-
-import pandas as pd
 import requests
+import pandas as pd
 import streamlit as st
+
 from bs4 import BeautifulSoup
 from groq import Groq
+from ddgs import DDGS
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 
-# ==================================================
-# PAGE CONFIGURATION
-# ==================================================
+# =========================================================
+# 1. PAGE CONFIGURATION
+# =========================================================
 st.set_page_config(
     page_title="Karnataka College Finder",
     page_icon="🎓",
     layout="wide"
 )
 
-# ==================================================
-# UI DESIGN - IMPROVED VISIBILITY
-# ==================================================
+# =========================================================
+# 2. UI DESIGN
+# =========================================================
 st.markdown("""
 <style>
 .stApp {
-    background: #f5f7fb;
+    background-color: #f4f7fc;
     color: #172033;
 }
 h1, h2, h3, h4 {
     color: #173b70 !important;
 }
-.stApp label,
+p, label, li, .stMarkdown {
+    color: #172033;
+}
 .stApp [data-testid="stWidgetLabel"],
-.stApp [data-testid="stWidgetLabel"] p,
-.stApp .stMarkdown p {
+.stApp [data-testid="stWidgetLabel"] p {
     color: #172033 !important;
 }
-.stApp input,
-.stApp textarea {
-    background: #ffffff !important;
+.stApp input, .stApp textarea {
+    background-color: white !important;
     color: #172033 !important;
     border: 1px solid #cbd5e1 !important;
 }
 .stApp [data-baseweb="select"] > div {
-    background: #ffffff !important;
+    background-color: white !important;
     color: #172033 !important;
     border-color: #cbd5e1 !important;
 }
@@ -58,47 +58,37 @@ h1, h2, h3, h4 {
 .stApp [data-testid="stRadio"] label p {
     color: #172033 !important;
 }
-.stApp .stButton > button,
-.stApp .stDownloadButton > button {
-    background: #ff4b4b !important;
+.stButton > button, .stDownloadButton > button {
+    background-color: #173b70 !important;
     color: white !important;
+    border-radius: 8px !important;
     border: none !important;
-    border-radius: 9px !important;
     font-weight: 600 !important;
 }
-.stApp .stButton > button:hover,
-.stApp .stDownloadButton > button:hover {
-    background: #df3535 !important;
-}
 section[data-testid="stSidebar"] {
-    background: #262730 !important;
+    background-color: #202938 !important;
 }
 section[data-testid="stSidebar"] * {
-    color: #ffffff;
+    color: white !important;
 }
 [data-testid="stMetric"] {
     background: white;
     border: 1px solid #dbe3ef;
-    border-radius: 12px;
-    padding: 15px;
-}
-[data-testid="stDataFrame"] {
-    background: white;
+    padding: 14px;
+    border-radius: 10px;
 }
 </style>
 """, unsafe_allow_html=True)
 
 st.title("🎓 Karnataka College Finder")
 st.write(
-    "Research Karnataka colleges, estimate their tiers, "
-    "check university/autonomous/VTU status, and ask questions."
+    "Research colleges, explore estimated tiers and affiliations, "
+    "and ask questions using a retrieval-augmented chatbot."
 )
-st.divider()
 
-
-# ==================================================
-# GROQ CONFIGURATION
-# ==================================================
+# =========================================================
+# 3. GROQ CONFIGURATION
+# =========================================================
 API_KEY = st.secrets.get(
     "GROQ_API_KEY_1",
     os.getenv("GROQ_API_KEY_1", "")
@@ -112,14 +102,15 @@ MODEL_NAME = st.secrets.get(
 client = Groq(api_key=API_KEY) if API_KEY else None
 
 
-# ==================================================
-# SESSION STATE
-# ==================================================
+# =========================================================
+# 4. SESSION STATE
+# =========================================================
 defaults = {
-    "df": None,
+    "college_df": None,
     "college_column": None,
-    "research_results": {},
-    "chat_history": []
+    "research": {},
+    "chat_history": [],
+    "loaded_filename": None
 }
 
 for key, value in defaults.items():
@@ -127,18 +118,22 @@ for key, value in defaults.items():
         st.session_state[key] = value
 
 
-# ==================================================
-# HELPERS
-# ==================================================
+# =========================================================
+# 5. HELPER FUNCTIONS
+# =========================================================
 def clean_text(value):
     return re.sub(r"\s+", " ", str(value)).strip()
 
 
 def find_college_column(df):
     accepted = {
-        "college name", "college", "institution name",
-        "institute name", "name of college",
-        "name of the college", "institution"
+        "college name",
+        "college",
+        "institution name",
+        "institute name",
+        "name of college",
+        "name of the college",
+        "institution"
     }
 
     for col in df.columns:
@@ -152,10 +147,10 @@ def find_college_column(df):
     return None
 
 
-def call_groq(system_prompt, user_prompt):
+def groq_answer(system_prompt, user_prompt):
     if not client:
         raise RuntimeError(
-            "GROQ_API_KEY_1 is not configured."
+            "GROQ_API_KEY_1 is missing from Streamlit Secrets."
         )
 
     response = client.chat.completions.create(
@@ -170,7 +165,7 @@ def call_groq(system_prompt, user_prompt):
     return response.choices[0].message.content
 
 
-def parse_json(answer):
+def parse_json_response(answer):
     answer = re.sub(
         r"^```(?:json)?\s*|\s*```$",
         "",
@@ -180,400 +175,431 @@ def parse_json(answer):
     match = re.search(r"\{.*\}", answer, re.DOTALL)
 
     if not match:
-        raise ValueError("AI did not return valid JSON.")
+        raise ValueError("The AI did not return valid JSON.")
 
     return json.loads(match.group())
 
 
-# ==================================================
-# WEB SEARCH
-# ==================================================
-def web_search(query, limit=5):
-    url = (
-        "https://html.duckduckgo.com/html/?q="
-        + quote_plus(query)
-    )
+# =========================================================
+# 6. WEB SEARCH - NO TAVILY KEY REQUIRED
+# =========================================================
+def search_web(query, max_results=5):
+    """
+    Uses the DDGS library. No separate search API key required.
+    Results depend on search service availability.
+    """
+    results = []
 
     try:
-        response = requests.get(
-            url,
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=20
-        )
-        response.raise_for_status()
+        with DDGS() as search:
+            items = search.text(
+                query,
+                max_results=max_results
+            )
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        results = []
+            for item in items:
+                results.append({
+                    "title": clean_text(
+                        item.get("title", "")
+                    ),
+                    "url": item.get("href", ""),
+                    "snippet": clean_text(
+                        item.get("body", "")
+                    )
+                })
 
-        for item in soup.select(".result"):
-            title_tag = item.select_one(".result__title")
-            snippet_tag = item.select_one(".result__snippet")
-
-            if not title_tag or not snippet_tag:
-                continue
-
-            anchor = title_tag.find("a")
-            if not anchor:
-                continue
-
-            results.append({
-                "title": clean_text(anchor.get_text(" ", strip=True)),
-                "url": anchor.get("href", ""),
-                "snippet": clean_text(
-                    snippet_tag.get_text(" ", strip=True)
-                )
-            })
-
-            if len(results) >= limit:
-                break
-
-        return results
-
-    except requests.RequestException:
+    except Exception:
+        # Search can fail because of rate limits or network restrictions.
         return []
 
+    return results
 
-def fetch_page(url):
+
+def fetch_page_text(url):
+    """
+    Attempts to retrieve readable text from a result page.
+    Some websites block automated requests.
+    """
     if not url.startswith(("http://", "https://")):
         return ""
 
     try:
         response = requests.get(
             url,
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=10
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 Chrome/130 Safari/537.36"
+                )
+            },
+            timeout=12
         )
+
         response.raise_for_status()
 
-        if "text/html" not in response.headers.get(
+        content_type = response.headers.get(
             "Content-Type", ""
-        ).lower():
+        ).lower()
+
+        if "text/html" not in content_type:
             return ""
 
         soup = BeautifulSoup(response.text, "html.parser")
 
         for tag in soup([
             "script", "style", "nav", "footer",
-            "header", "noscript"
+            "header", "noscript", "svg"
         ]):
             tag.decompose()
 
         return clean_text(
             soup.get_text(" ", strip=True)
-        )[:3500]
+        )[:4500]
 
     except requests.RequestException:
         return ""
 
 
-# ==================================================
-# RESEARCH AND CLASSIFICATION
-# ==================================================
+# =========================================================
+# 7. COLLEGE RESEARCH
+# =========================================================
 def research_college(college_name, spreadsheet_info=""):
     queries = [
-        f'"{college_name}" official website Karnataka',
-        f'"{college_name}" VTU affiliation autonomous university',
-        f'"{college_name}" NIRF NAAC NBA accreditation ranking',
-        f'"{college_name}" official affiliation university'
+        f'"{college_name}" Karnataka official website',
+        f'"{college_name}" affiliation university VTU',
+        f'"{college_name}" autonomous status official',
+        f'"{college_name}" NIRF ranking NAAC NBA'
     ]
 
-    all_sources = []
+    sources = []
+    seen_urls = set()
 
     for query in queries:
-        all_sources.extend(web_search(query, limit=4))
-        time.sleep(0.3)
+        found = search_web(query, max_results=5)
 
-    unique_sources = []
-    seen = set()
+        for item in found:
+            url = item.get("url", "")
 
-    for source in all_sources:
-        key = source.get("url") or source.get("title")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                sources.append(item)
 
-        if key and key not in seen:
-            seen.add(key)
-            unique_sources.append(source)
+        time.sleep(0.25)
 
+    # Collect page content and search snippets.
     evidence_parts = []
 
-    for source in unique_sources[:10]:
-        page_text = fetch_page(source.get("url", ""))
+    for source in sources[:12]:
+        page_text = fetch_page_text(source.get("url", ""))
 
         evidence_parts.append(
             f"Title: {source.get('title', '')}\n"
             f"URL: {source.get('url', '')}\n"
-            f"Snippet: {source.get('snippet', '')}\n"
-            f"Page text: {page_text}"
+            f"Search snippet: {source.get('snippet', '')}\n"
+            f"Page content: {page_text}"
         )
 
     evidence = "\n\n".join(evidence_parts)
 
-    if not evidence:
-        evidence = "No usable web evidence was retrieved."
-
-    prompt = f"""
-Research this college in Karnataka.
-
-COLLEGE: {college_name}
-SPREADSHEET INFORMATION: {spreadsheet_info}
-
-WEB EVIDENCE:
-{evidence[:16000]}
-
-Return the following information:
-
-1. tier_estimate:
-   Tier 1, Tier 2, Tier 3, or Unable to determine.
-
-2. institution_type:
-   University, Autonomous College, VTU-affiliated College,
-   Other Affiliated College, Deemed-to-be University,
-   or Unable to determine.
-
-3. university_name:
-   Name of the university, if verified.
-
-4. affiliation:
-   Verified affiliating university, or Unable to determine.
-
-5. nirf_information:
-   Rank, category and year only if supported by the evidence.
-
-6. accreditation:
-   Verified NAAC/NBA information, or Unable to determine.
-
-7. confidence:
-   High, Medium or Low.
-
-8. evidence_summary:
-   Explain why you selected the tier and institution type.
-
-9. limitations:
-   Explain missing or conflicting evidence.
-
-10. sources_used:
-    List source URLs that appear in the supplied evidence.
-
-IMPORTANT:
-- Tier 1/2/3 is an estimate, not an official universal classification.
-- Do not assume every engineering college is affiliated to VTU.
-- Do not call a college a university merely because its name sounds similar.
-- Do not invent accreditation, NIRF rankings or affiliations.
-- Give priority to official institution, university, NIRF and accreditation
-  sources present in the evidence.
-- If the evidence is insufficient, use "Unable to determine".
-
-Return ONLY valid JSON with these exact keys:
-tier_estimate, institution_type, university_name, affiliation,
-nirf_information, accreditation, confidence, evidence_summary,
-limitations, sources_used.
-"""
-
-    try:
-        answer = call_groq(
-            "You are a careful college research assistant. "
-            "Use evidence only. Never fabricate facts. Return JSON.",
-            prompt
+    if not evidence.strip():
+        evidence = (
+            "No web evidence could be retrieved. "
+            "Do not infer the college's status from its name."
         )
-        result = parse_json(answer)
 
-    except Exception as error:
+    if not client:
         result = {
             "tier_estimate": "Unable to determine",
             "institution_type": "Unable to determine",
             "university_name": "Unable to determine",
             "affiliation": "Unable to determine",
-            "nirf_information": "Unable to determine",
-            "accreditation": "Unable to determine",
+            "nirf_information": "Not verified",
+            "accreditation": "Not verified",
             "confidence": "Low",
-            "evidence_summary": "Research could not be verified.",
-            "limitations": str(error),
+            "evidence_summary": (
+                "Groq API key is not configured."
+            ),
+            "limitations": "AI analysis was not performed.",
             "sources_used": []
         }
+    else:
+        prompt = f"""
+Research this Karnataka college using the evidence supplied below.
+
+COLLEGE: {college_name}
+
+SPREADSHEET DETAILS:
+{spreadsheet_info}
+
+RETRIEVED WEB EVIDENCE:
+{evidence[:18000]}
+
+Return JSON with exactly these keys:
+tier_estimate
+institution_type
+university_name
+affiliation
+nirf_information
+accreditation
+confidence
+evidence_summary
+limitations
+sources_used
+
+Allowed tier_estimate values:
+Tier 1, Tier 2, Tier 3, Unable to determine.
+
+Allowed institution_type values:
+University
+Autonomous College
+VTU-affiliated College
+Other Affiliated College
+Deemed-to-be University
+Unable to determine
+
+Rules:
+1. Tier 1/2/3 is an estimate, not a universal official classification.
+2. Never invent a tier, NIRF rank, accreditation or affiliation.
+3. Prioritize official college/university websites and official ranking
+   or accreditation sources when such evidence is present.
+4. Do not assume every engineering college is affiliated to VTU.
+5. A college may be autonomous while remaining affiliated to a university.
+6. Use Unable to determine when the evidence is insufficient.
+7. Explain which evidence supports the classification.
+8. Use only URLs present in the retrieved evidence for sources_used.
+9. If search results are empty, state that web research was unsuccessful.
+
+Return valid JSON only.
+"""
+
+        try:
+            answer = groq_answer(
+                "You are a careful college research assistant. "
+                "Use retrieved evidence, not guesses. Return valid JSON.",
+                prompt
+            )
+            result = parse_json_response(answer)
+
+        except Exception as error:
+            result = {
+                "tier_estimate": "Unable to determine",
+                "institution_type": "Unable to determine",
+                "university_name": "Unable to determine",
+                "affiliation": "Unable to determine",
+                "nirf_information": "Not verified",
+                "accreditation": "Not verified",
+                "confidence": "Low",
+                "evidence_summary": "AI research could not be completed.",
+                "limitations": str(error),
+                "sources_used": []
+            }
 
     result["college_name"] = college_name
-    result["search_results"] = unique_sources
+    result["search_results"] = sources
     result["web_evidence"] = evidence
     result["spreadsheet_info"] = spreadsheet_info
 
     return result
 
 
-# ==================================================
-# BUILD RAG DOCUMENTS
-# ==================================================
-def build_documents(df, college_column, results):
+# =========================================================
+# 8. BUILD THE RAG KNOWLEDGE BASE
+# =========================================================
+def build_documents(df, college_column, research_results):
     documents = []
 
+    # Spreadsheet documents.
     for _, row in df.iterrows():
-        row_text = " | ".join(
+        college = str(row[college_column])
+
+        row_text = "\n".join(
             f"{col}: {row[col]}"
             for col in df.columns
             if pd.notna(row[col])
         )
 
         documents.append({
-            "text": row_text,
+            "text": f"College: {college}\n{row_text}",
             "source": "Uploaded spreadsheet"
         })
 
-    for result in results.values():
+    # Research documents with source URLs and retrieved evidence.
+    for name, result in research_results.items():
         documents.append({
             "text": (
-                f"College: {result.get('college_name')}\n"
-                f"Tier: {result.get('tier_estimate')}\n"
+                f"College: {name}\n"
+                f"Tier estimate: {result.get('tier_estimate')}\n"
                 f"Institution type: {result.get('institution_type')}\n"
                 f"University: {result.get('university_name')}\n"
                 f"Affiliation: {result.get('affiliation')}\n"
                 f"NIRF: {result.get('nirf_information')}\n"
                 f"Accreditation: {result.get('accreditation')}\n"
                 f"Confidence: {result.get('confidence')}\n"
-                f"Evidence: {result.get('evidence_summary')}\n"
+                f"Evidence summary: {result.get('evidence_summary')}\n"
                 f"Limitations: {result.get('limitations')}\n"
-                f"Web evidence: {result.get('web_evidence', '')}"
+                f"Sources and retrieved evidence:\n"
+                f"{result.get('web_evidence', '')}"
             ),
-            "source": f"Research: {result.get('college_name')}"
+            "source": f"Web research: {name}"
         })
 
     return documents
 
 
-def retrieve_documents(question, documents, top_k=5):
+def retrieve_documents(question, documents, top_k=6):
     if not documents:
         return []
 
-    try:
-        texts = [doc["text"] for doc in documents]
+    texts = [doc["text"] for doc in documents]
 
+    try:
         vectorizer = TfidfVectorizer(
             stop_words="english",
-            max_features=10000
+            ngram_range=(1, 2),
+            max_features=15000
         )
 
         matrix = vectorizer.fit_transform(texts)
-        query_vector = vectorizer.transform([question])
+        question_vector = vectorizer.transform([question])
 
         scores = cosine_similarity(
-            query_vector, matrix
+            question_vector, matrix
         ).flatten()
 
         indices = scores.argsort()[::-1][:top_k]
 
         return [
-            {**documents[i], "score": float(scores[i])}
-            for i in indices if scores[i] > 0
+            {
+                **documents[i],
+                "score": float(scores[i])
+            }
+            for i in indices
+            if scores[i] > 0
         ]
 
     except ValueError:
         return []
 
 
-# ==================================================
-# SIDEBAR
-# ==================================================
+# =========================================================
+# 9. SIDEBAR
+# =========================================================
 with st.sidebar:
     st.header("⚙️ Settings")
-    st.write("Region: Karnataka, India")
-    st.write("AI provider: Groq")
+    st.write("Location: Karnataka, India")
+    st.write("AI: Groq")
+    st.write("Web search: DuckDuckGo")
+    st.write("Retrieval: TF-IDF")
 
     if client:
         st.success("Groq API key detected")
     else:
-        st.error("GROQ_API_KEY_1 is missing")
+        st.warning("GROQ_API_KEY_1 is missing")
 
     st.caption(
-        "Never upload your API key to GitHub."
+        "Never commit your API keys to GitHub."
     )
 
-    if st.button("Clear chatbot history"):
+    if st.button("Clear chatbot conversation"):
         st.session_state.chat_history = []
         st.rerun()
 
 
-# ==================================================
-# UPLOAD COLLEGE LIST
-# ==================================================
+# =========================================================
+# 10. UPLOAD EXCEL OR CSV
+# =========================================================
 st.header("1. Upload college list")
 
 uploaded_file = st.file_uploader(
-    "Upload Excel (.xlsx/.xls) or CSV (.csv)",
+    "Choose an Excel or CSV file",
     type=["xlsx", "xls", "csv"]
 )
 
 if uploaded_file:
-    try:
-        if uploaded_file.name.lower().endswith(".csv"):
-            new_df = pd.read_csv(uploaded_file)
-        else:
-            new_df = pd.read_excel(uploaded_file)
+    if (
+        st.session_state.loaded_filename
+        != uploaded_file.name
+    ):
+        try:
+            if uploaded_file.name.lower().endswith(".csv"):
+                df = pd.read_csv(uploaded_file)
+            else:
+                df = pd.read_excel(uploaded_file)
 
-        column = find_college_column(new_df)
+            college_column = find_college_column(df)
 
-        if column is None:
-            st.error(
-                "College name column not found. Rename it to "
-                "'College Name' or 'Institution Name'."
-            )
-            st.write("Your columns:", list(new_df.columns))
+            if college_column is None:
+                st.error(
+                    "College name column not found. "
+                    "Rename it to 'College Name' or "
+                    "'Institution Name'."
+                )
+                st.write("Detected columns:", list(df.columns))
 
-        else:
-            new_df[column] = new_df[column].astype(str).str.strip()
-            new_df = new_df[
-                new_df[column].ne("")
-                & new_df[column].str.lower().ne("nan")
-            ].drop_duplicates(subset=[column])
+            else:
+                df[college_column] = (
+                    df[college_column].astype(str).str.strip()
+                )
 
-            st.session_state.df = new_df
-            st.session_state.college_column = column
-            st.session_state.research_results = {}
-            st.session_state.chat_history = []
+                df = df[
+                    df[college_column].ne("")
+                    & df[college_column].str.lower().ne("nan")
+                ].drop_duplicates(subset=[college_column])
 
-    except Exception as error:
-        st.error(f"File error: {error}")
+                st.session_state.college_df = df
+                st.session_state.college_column = college_column
+                st.session_state.research = {}
+                st.session_state.chat_history = []
+                st.session_state.loaded_filename = uploaded_file.name
+
+        except Exception as error:
+            st.error(f"Could not read the file: {error}")
 
 
-# ==================================================
-# COLLEGE SELECTION
-# ==================================================
-df = st.session_state.df
+# =========================================================
+# 11. SELECT COLLEGE
+# =========================================================
+df = st.session_state.college_df
 
 if df is not None:
-    column = st.session_state.college_column
-    names = df[column].tolist()
+    college_column = st.session_state.college_column
+    college_names = df[college_column].tolist()
 
     st.success(f"Loaded {len(df)} colleges.")
 
-    with st.expander("Preview uploaded spreadsheet"):
+    with st.expander("Preview uploaded Excel data"):
         st.dataframe(df, use_container_width=True)
 
     st.header("2. Select a college")
 
-    selected = st.selectbox(
-        "Select a college",
-        names,
-        key="selected_college"
+    selected_college = st.selectbox(
+        "College name",
+        college_names
     )
 
-    selected_row = df[df[column] == selected].iloc[0]
+    selected_row = df[
+        df[college_column] == selected_college
+    ].iloc[0]
 
-    with st.expander("College details from spreadsheet"):
+    with st.expander("View spreadsheet details"):
         st.json({
             str(col): str(selected_row[col])
             for col in df.columns
             if pd.notna(selected_row[col])
         })
 
-    # ==================================================
-    # RESEARCH CONTROLS
-    # ==================================================
-    st.header("3. Research tier and institution type")
+    # =====================================================
+    # 12. RESEARCH CONTROLS
+    # =====================================================
+    st.header("3. Research college information")
 
-    scope = st.radio(
-        "Choose research scope",
+    research_scope = st.radio(
+        "Research scope",
         ["Selected college", "All colleges"],
         horizontal=True
     )
 
-    max_count = st.number_input(
+    max_colleges = st.number_input(
         "Maximum colleges to research",
         min_value=1,
         max_value=100,
@@ -581,84 +607,92 @@ if df is not None:
     )
 
     if st.button(
-        "🔎 Research tier, university and affiliation",
+        "🔎 Research tier and university status",
         type="primary"
     ):
         if not client:
             st.error(
                 "Add GROQ_API_KEY_1 in Streamlit Cloud Secrets."
             )
+
         else:
             targets = (
-                [selected]
-                if scope == "Selected college"
-                else names[:int(max_count)]
+                [selected_college]
+                if research_scope == "Selected college"
+                else college_names[:int(max_colleges)]
             )
 
             progress = st.progress(0)
             status = st.empty()
 
-            for i, name in enumerate(targets):
+            for index, name in enumerate(targets):
                 status.write(
-                    f"Researching {i + 1}/{len(targets)}: {name}"
+                    f"Researching {index + 1}/{len(targets)}: {name}"
                 )
 
-                row = df[df[column] == name].iloc[0]
+                row = df[
+                    df[college_column] == name
+                ].iloc[0]
 
-                extra = " | ".join(
+                spreadsheet_info = "\n".join(
                     f"{col}: {row[col]}"
                     for col in df.columns
-                    if col != column and pd.notna(row[col])
+                    if pd.notna(row[col])
                 )
 
-                st.session_state.research_results[name] = (
-                    research_college(name, extra)
+                result = research_college(
+                    name,
+                    spreadsheet_info
                 )
 
-                progress.progress((i + 1) / len(targets))
+                st.session_state.research[name] = result
 
-            status.success("Research completed.")
+                progress.progress(
+                    (index + 1) / len(targets)
+                )
+
+            status.success("Research process finished.")
             st.rerun()
 
-    # ==================================================
-    # RESULTS TABLE AND FILTERS
-    # ==================================================
-    results = st.session_state.research_results
+    # =====================================================
+    # 13. RESULTS AND FILTERS
+    # =====================================================
+    results = st.session_state.research
 
     if results:
-        st.header("4. College tier and university results")
+        st.header("4. Tier and institution classification")
 
-        result_rows = []
+        rows = []
 
-        for name, r in results.items():
-            result_rows.append({
+        for name, result in results.items():
+            rows.append({
                 "College Name": name,
-                "Estimated Tier": r.get(
+                "Estimated Tier": result.get(
                     "tier_estimate", "Unable to determine"
                 ),
-                "Institution Type": r.get(
+                "Institution Type": result.get(
                     "institution_type", "Unable to determine"
                 ),
-                "University": r.get(
+                "University": result.get(
                     "university_name", "Unable to determine"
                 ),
-                "Affiliation": r.get(
+                "Affiliation": result.get(
                     "affiliation", "Unable to determine"
                 ),
-                "NIRF": r.get(
-                    "nirf_information", "Unable to determine"
+                "NIRF": result.get(
+                    "nirf_information", "Not verified"
                 ),
-                "Accreditation": r.get(
-                    "accreditation", "Unable to determine"
+                "Accreditation": result.get(
+                    "accreditation", "Not verified"
                 ),
-                "Confidence": r.get("confidence", "Low")
+                "Confidence": result.get("confidence", "Low")
             })
 
-        result_df = pd.DataFrame(result_rows)
+        result_df = pd.DataFrame(rows)
 
-        col1, col2 = st.columns(2)
+        first, second = st.columns(2)
 
-        with col1:
+        with first:
             tier_filter = st.selectbox(
                 "Filter by tier",
                 [
@@ -670,8 +704,8 @@ if df is not None:
                 ]
             )
 
-        with col2:
-            type_filter = st.selectbox(
+        with second:
+            institution_filter = st.selectbox(
                 "Filter by institution type",
                 [
                     "All types",
@@ -684,31 +718,61 @@ if df is not None:
                 ]
             )
 
-        filtered = result_df.copy()
+        filtered_df = result_df.copy()
 
         if tier_filter != "All tiers":
-            filtered = filtered[
-                filtered["Estimated Tier"] == tier_filter
+            filtered_df = filtered_df[
+                filtered_df["Estimated Tier"] == tier_filter
             ]
 
-        if type_filter != "All types":
-            filtered = filtered[
-                filtered["Institution Type"] == type_filter
+        if institution_filter != "All types":
+            filtered_df = filtered_df[
+                filtered_df["Institution Type"] == institution_filter
             ]
 
-        st.dataframe(filtered, use_container_width=True)
+        # HTML table styling via pandas Styler.
+        styled_df = filtered_df.style.set_properties(
+            **{
+                "background-color": "#ffffff",
+                "color": "#172033",
+                "border-color": "#d1d5db",
+                "text-align": "left"
+            }
+        ).set_table_styles([
+            {
+                "selector": "th",
+                "props": [
+                    ("background-color", "#173b70"),
+                    ("color", "#ffffff"),
+                    ("font-weight", "bold")
+                ]
+            },
+            {
+                "selector": "td",
+                "props": [
+                    ("background-color", "#ffffff"),
+                    ("color", "#172033")
+                ]
+            }
+        ])
+
+        st.dataframe(
+            styled_df,
+            use_container_width=True,
+            hide_index=True
+        )
 
         st.download_button(
-            "⬇️ Download all research results",
+            "⬇️ Download college research CSV",
             data=result_df.to_csv(index=False).encode("utf-8"),
-            file_name="karnataka_college_results.csv",
+            file_name="karnataka_college_research.csv",
             mime="text/csv"
         )
 
-        # ==================================================
-        # DETAILED RESULT
-        # ==================================================
-        st.subheader("Detailed college report")
+        # =================================================
+        # 14. DETAILED REPORT AND SOURCES
+        # =================================================
+        st.subheader("Detailed research report")
 
         detail_name = st.selectbox(
             "Choose a researched college",
@@ -718,25 +782,25 @@ if df is not None:
 
         detail = results[detail_name]
 
-        a, b = st.columns(2)
+        left, right = st.columns(2)
 
-        with a:
+        with left:
             st.metric(
-                "Estimated tier",
+                "Estimated Tier",
                 detail.get("tier_estimate", "Unable to determine")
             )
-            st.markdown("**Institution type**")
+            st.markdown("**Institution Type**")
             st.info(
                 detail.get(
                     "institution_type", "Unable to determine"
                 )
             )
-            st.markdown("**Affiliating university**")
+            st.markdown("**University Name**")
             st.write(
                 detail.get("university_name", "Unable to determine")
             )
 
-        with b:
+        with right:
             st.metric(
                 "Confidence",
                 detail.get("confidence", "Low")
@@ -745,7 +809,7 @@ if df is not None:
             st.write(
                 detail.get("affiliation", "Unable to determine")
             )
-            st.markdown("**NIRF information**")
+            st.markdown("**NIRF Information**")
             st.write(
                 detail.get("nirf_information", "Not verified")
             )
@@ -753,49 +817,59 @@ if df is not None:
         st.markdown("**Accreditation**")
         st.write(detail.get("accreditation", "Not verified"))
 
-        st.markdown("**Evidence summary**")
-        st.write(detail.get("evidence_summary", "No summary available."))
+        st.markdown("**Evidence Summary**")
+        st.write(detail.get("evidence_summary", ""))
 
         st.markdown("**Limitations**")
-        st.write(detail.get("limitations", "Not available."))
+        st.write(detail.get("limitations", ""))
 
-        st.markdown("### Research sources")
+        st.markdown("### Retrieved web sources")
 
-        for source in detail.get("search_results", []):
-            url = source.get("url", "")
-            title = source.get("title", "Source")
+        if detail.get("search_results"):
+            for source in detail["search_results"]:
+                title = source.get("title", "Source")
+                url = source.get("url", "")
+                snippet = source.get("snippet", "")
 
-            if url.startswith(("http://", "https://")):
-                st.markdown(f"- [{title}]({url})")
-            else:
-                st.write(f"- {title}")
+                if url.startswith(("http://", "https://")):
+                    st.markdown(f"- [{title}]({url})")
+                else:
+                    st.write(title)
 
-            st.caption(source.get("snippet", ""))
+                if snippet:
+                    st.caption(snippet)
+        else:
+            st.warning(
+                "No search results were retrieved. "
+                "Try again later or verify the college manually."
+            )
+
+        with st.expander("View collected research evidence"):
+            st.text(detail.get("web_evidence", ""))
 
         st.warning(
-            "Tier is an AI estimate, not an official classification. "
-            "Confirm affiliation and institution status through official "
-            "university or college records before making decisions."
+            "Tier is an estimate, not an official universal category. "
+            "Verify affiliations and rankings through official sources."
         )
 
-    # ==================================================
-    # RAG CHATBOT
-    # ==================================================
+    # =====================================================
+    # 15. RAG CHATBOT
+    # =====================================================
     st.divider()
     st.header("5. Ask the college chatbot")
 
     documents = build_documents(
         df,
-        column,
-        st.session_state.research_results
+        college_column,
+        st.session_state.research
     )
 
-    for msg in st.session_state.chat_history:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+    for message in st.session_state.chat_history:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
 
     question = st.chat_input(
-        "Example: Show researched autonomous colleges"
+        "Example: Which researched colleges are autonomous?"
     )
 
     if question:
@@ -809,41 +883,62 @@ if df is not None:
 
         with st.chat_message("assistant"):
             if not client:
-                answer = "Configure GROQ_API_KEY_1 to use the chatbot."
+                answer = (
+                    "Configure GROQ_API_KEY_1 in Streamlit Secrets."
+                )
                 st.error(answer)
 
             else:
-                relevant = retrieve_documents(question, documents)
-
-                context = "\n\n".join(
-                    f"Source: {d['source']}\n{d['text'][:3000]}"
-                    for d in relevant
+                relevant_docs = retrieve_documents(
+                    question,
+                    documents,
+                    top_k=6
                 )
+
+                context_parts = []
+
+                for doc in relevant_docs:
+                    context_parts.append(
+                        f"Source label: {doc['source']}\n"
+                        f"Evidence:\n{doc['text'][:3500]}"
+                    )
+
+                context = "\n\n---\n\n".join(context_parts)
 
                 if not context:
                     context = (
-                        "No matching information was found. "
+                        "No matching documents were retrieved. "
                         "Do not invent an answer."
                     )
 
                 try:
-                    answer = call_groq(
-                        "You are Karnataka College Finder. "
-                        "Answer using the supplied evidence only. "
-                        "Do not invent tiers, rankings or affiliations. "
-                        "Say when information is missing.",
-                        f"Question: {question}\n\nEvidence:\n{context}"
+                    answer = groq_answer(
+                        """
+You are Karnataka College Finder, a RAG research assistant.
+
+Answer using only the supplied retrieved context.
+Answer the question directly and clearly.
+Distinguish verified facts from estimates.
+Never invent rankings, tiers, accreditation or affiliation.
+Tier 1/2/3 is an estimate unless an explicit source defines it.
+If evidence is missing, say so.
+Include relevant source URLs found in the supplied context.
+Do not claim to have searched the web during this chat;
+the web evidence was collected in the research step.
+""",
+                        f"USER QUESTION:\n{question}\n\n"
+                        f"RETRIEVED CONTEXT:\n{context}"
                     )
 
                     st.markdown(answer)
 
-                    with st.expander("Retrieved information"):
-                        for d in relevant:
-                            st.markdown(f"**{d['source']}**")
-                            st.write(d["text"][:1500])
+                    with st.expander("View retrieved RAG evidence"):
+                        for doc in relevant_docs:
+                            st.markdown(f"**{doc['source']}**")
+                            st.write(doc["text"][:2000])
 
                 except Exception as error:
-                    answer = f"Could not answer: {error}"
+                    answer = f"Could not generate an answer: {error}"
                     st.error(answer)
 
         st.session_state.chat_history.append({
@@ -853,25 +948,24 @@ if df is not None:
 
 else:
     st.info(
-        "Upload an Excel or CSV file to start. "
-        "Your spreadsheet must contain a College Name column."
+        "Upload an Excel or CSV file containing a column named "
+        "'College Name' to begin."
     )
 
-    st.markdown("### Example spreadsheet format")
+    st.markdown("### Example spreadsheet")
 
-    st.dataframe(pd.DataFrame({
-        "College Name": [
-            "K. V. G. College of Engineering",
-            "P D A College of Engineering",
-            "BMS College of Engineering"
-        ],
-        "City": [
-            "Sullia",
-            "Kalaburagi",
-            "Bengaluru"
-        ]
-    }), use_container_width=True)
-
-    st.caption(
-        "These are example input names, not verified tier classifications."
+    st.dataframe(
+        pd.DataFrame({
+            "College Name": [
+                "P. A. College of Engineering",
+                "Canara Engineering College",
+                "Malnad College of Engineering"
+            ],
+            "City": [
+                "Mangaluru",
+                "Bantwal",
+                "Hassan"
+            ]
+        }),
+        use_container_width=True
     )
