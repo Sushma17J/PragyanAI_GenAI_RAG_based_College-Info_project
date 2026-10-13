@@ -25,43 +25,119 @@ from langchain_huggingface import HuggingFaceEmbeddings
 st.set_page_config(page_title="Karnataka College Finder", page_icon="🎓", layout="wide")
 st.markdown("""
 <style>
-/* Global high-contrast theme: dark text on light surfaces */
-.stApp, [data-testid="stAppViewContainer"] {background: #f3f6fb !important; color: #172033 !important;}
-[data-testid="stAppViewContainer"] .main .block-container {padding-top: 1.6rem; padding-bottom: 3rem;}
-.stApp p, .stApp label, .stApp li, .stApp span, .stApp div {color: inherit;}
-.stMarkdown, .stMarkdown p, .stMarkdown li, .stCaption, [data-testid="stCaptionContainer"] {color: #263449 !important;}
-.hero {padding:1.35rem 1.6rem;border-radius:18px;background:linear-gradient(120deg,#10243a,#245b78);color:white !important;margin-bottom:1rem;}
-.hero h1 {color:#ffffff !important;margin:0;font-size:2rem;}
-.hero p {color:#e0edf5 !important;margin:.35rem 0 0 0;}
-h1,h2,h3,h4 {color:#12243a !important;}
-div[data-testid="stMetric"] {background:#ffffff !important;padding:16px;border-radius:14px;border:1px solid #d7e0ed;box-shadow:0 2px 8px rgba(20,40,70,.04);}
-div[data-testid="stMetric"] label, div[data-testid="stMetric"] [data-testid="stMetricLabel"] p {color:#34445b !important;}
-div[data-testid="stMetric"] [data-testid="stMetricValue"], div[data-testid="stMetric"] [data-testid="stMetricDelta"] {color:#14263e !important;}
-/* Inputs, dropdowns, chat input and text areas */
-.stTextInput input, .stTextArea textarea, .stNumberInput input, [data-testid="stChatInput"] textarea {background:#ffffff !important;color:#172033 !important;-webkit-text-fill-color:#172033 !important;border:1px solid #b9c7d9 !important;}
-.stTextInput input::placeholder, .stTextArea textarea::placeholder, [data-testid="stChatInput"] textarea::placeholder {color:#64748b !important;-webkit-text-fill-color:#64748b !important;opacity:1 !important;}
-[data-baseweb="select"] > div {background:#ffffff !important;color:#172033 !important;border-color:#b9c7d9 !important;}
-[data-baseweb="select"] *, [role="listbox"] *, [role="option"] {color:#172033 !important;}
-[data-testid="stFileUploader"] {background:#ffffff !important;border:1px dashed #b9c7d9;border-radius:12px;padding:10px;}
-[data-testid="stFileUploader"] * {color:#263449 !important;}
+/* Main page */
+.stApp {
+    background-color: #f4f7fb;
+    color: #172033;
+}
+
+/* Headings and normal text */
+h1, h2, h3, h4, p, label {
+    color: #172033 !important;
+}
+
+/* Dropdown input */
+div[data-baseweb="select"] > div {
+    background-color: #20242e !important;
+    border: 1px solid #ffffff !important;
+}
+
+/* Search input text */
+div[data-baseweb="select"] input {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    caret-color: #ffffff !important;
+}
+
+/* Search placeholder */
+div[data-baseweb="select"] input::placeholder {
+    color: #ffffff !important;
+    opacity: 1 !important;
+}
+
+/* Selected dropdown values */
+div[data-baseweb="select"] span {
+    color: #ffffff !important;
+}
+
+/* Dropdown popup */
+div[data-baseweb="popover"],
+div[data-baseweb="popover"] > div,
+div[data-baseweb="menu"],
+ul[role="listbox"] {
+    background-color: #20242e !important;
+    color: #ffffff !important;
+}
+
+/* All college options */
+li[role="option"],
+div[role="option"],
+li[role="option"] *,
+div[role="option"] * {
+    background-color: #20242e !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+}
+
+/* Hovered college */
+li[role="option"]:hover,
+div[role="option"]:hover {
+    background-color: #3b4558 !important;
+}
+
+/* Select all and dropdown labels */
+div[data-baseweb="popover"] *,
+div[data-baseweb="menu"] * {
+    color: #ffffff !important;
+}
+
+/* Selected college tags */
+span[data-baseweb="tag"] {
+    background-color: #374151 !important;
+    color: #ffffff !important;
+}
+
+span[data-baseweb="tag"] * {
+    color: #ffffff !important;
+}
+
+/* Results cards */
+div[data-testid="stMetric"] {
+    background-color: #ffffff !important;
+    border: 1px solid #dbe3ef;
+    border-radius: 12px;
+    padding: 16px;
+}
+
+div[data-testid="stMetric"] label,
+div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+    color: #172033 !important;
+}
+
 /* Buttons */
-div.stButton > button, div[data-testid="stDownloadButton"] button {border-radius:10px;min-height:2.8rem;font-weight:600;background:#ffffff;color:#172033;border:1px solid #b9c7d9;}
-div.stButton > button[kind="primary"], div.stButton > button[data-testid="stBaseButton-primary"] {background:#ef4444 !important;color:#ffffff !important;border:0 !important;}
-div.stButton > button:hover, div[data-testid="stDownloadButton"] button:hover {border-color:#ef4444;color:#b91c1c;}
-/* Tables and expanders */
-[data-testid="stDataFrame"], [data-testid="stTable"] {background:#ffffff !important;}
-[data-testid="stExpander"] {background:#ffffff !important;border:1px solid #d7e0ed !important;border-radius:10px !important;}
-[data-testid="stExpander"] summary, [data-testid="stExpander"] summary p {color:#172033 !important;}
-/* Chat messages: readable user and assistant text */
-[data-testid="stChatMessage"] {background:#ffffff !important;border:1px solid #d7e0ed;border-radius:14px;padding:12px;margin:8px 0;}
-[data-testid="stChatMessage"] p, [data-testid="stChatMessage"] li, [data-testid="stChatMessage"] div {color:#172033 !important;}
-[data-testid="stChatInput"] {background:#ffffff !important;border:1px solid #b9c7d9 !important;border-radius:12px !important;}
-[data-testid="stSidebar"] {background:#e8eef6 !important;}
-[data-testid="stSidebar"] * {color:#172033 !important;}
-[data-testid="stAlert"] p {color:#172033 !important;}
+.stButton > button {
+    background-color: #ff4b4b !important;
+    color: #ffffff !important;
+    border: none;
+    border-radius: 10px;
+    font-weight: bold;
+}
+
+.stButton > button p {
+    color: #ffffff !important;
+}
+
+/* Chat input */
+div[data-testid="stChatInput"] textarea {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+}
+
+/* Tables */
+div[data-testid="stDataFrame"] {
+    background-color: #ffffff !important;
+}
 </style>
-<div class="hero"><h1>🎓 Karnataka College Finder</h1>
-<p>Evidence-based college research, estimated tiers, affiliation details, and a conversational RAG assistant.</p></div>
 """, unsafe_allow_html=True)
 
 # ============================================================
